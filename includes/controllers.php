@@ -50,13 +50,14 @@ function handleCreateRepo(): array {
     $name = trim($_POST['name'] ?? '');
     $desc = trim($_POST['description'] ?? '');
     $private = isset($_POST['is_private']) ? 1 : 0;
+    $repoType = $_POST['repo_type'] ?? 'code';
     
     if (!preg_match('/^[a-zA-Z0-9_.-]{1,100}$/', $name))
         return ['error' => 'Invalid repo name (alphanumeric, -, _, .)'];
     
     try {
-        $stmt = db()->prepare('INSERT INTO repositories (user_id, name, description, is_private) VALUES (?,?,?,?)');
-        $stmt->execute([$user['id'], $name, $desc, $private]);
+        $stmt = db()->prepare('INSERT INTO repositories (user_id, name, description, is_private, repo_type) VALUES (?,?,?,?,?)');
+        $stmt->execute([$user['id'], $name, $desc, $private, $repoType]);
         $repoId = db()->lastInsertId();
         
         $fs = new RepoFS($user['username'], $name);
@@ -266,5 +267,181 @@ function searchRepos(string $q): array {
         ");
         $stmt->execute([$like, $like, $like]);
     }
+    return $stmt->fetchAll();
+}
+
+// ─── MESSAGING & SHARING ──────────────────────────────────────────────────────
+
+function handleSendMessage(): array {
+    $user = requireAuth();
+    $receiverUsername = $_POST['receiver'] ?? '';
+    $message = trim($_POST['message'] ?? '');
+    
+    if (empty($receiverUsername) || empty($message)) {
+        return ['error' => 'Invalid message'];
+    }
+    
+    $stmt = db()->prepare('SELECT id FROM users WHERE username = ?');
+    $stmt->execute([$receiverUsername]);
+    $receiver = $stmt->fetch();
+    
+    if (!$receiver) {
+        return ['error' => 'User not found'];
+    }
+    
+    $stmt = db()->prepare('INSERT INTO messages (sender_id, receiver_id, message) VALUES (?,?,?)');
+    $stmt->execute([$user['id'], $receiver['id'], $message]);
+    
+    return ['success' => true];
+}
+
+function getMessages(string $otherUsername): array {
+    $user = requireAuth();
+    
+    $stmt = db()->prepare('SELECT id FROM users WHERE username = ?');
+    $stmt->execute([$otherUsername]);
+    $other = $stmt->fetch();
+    
+    if (!$other) return [];
+    
+    $stmt = db()->prepare("
+        SELECT m.*, u.username as sender_name
+        FROM messages m
+        JOIN users u ON u.id = m.sender_id
+        WHERE (m.sender_id = ? AND m.receiver_id = ?) OR (m.sender_id = ? AND m.receiver_id = ?)
+        ORDER BY m.created_at ASC
+    ");
+    $stmt->execute([$user['id'], $other['id'], $other['id'], $user['id']]);
+    $messages = $stmt->fetchAll();
+    
+    // Mark as read
+    $stmt = db()->prepare("UPDATE messages SET is_read = 1 WHERE sender_id = ? AND receiver_id = ? AND is_read = 0");
+    $stmt->execute([$other['id'], $user['id']]);
+    
+    return $messages;
+}
+
+function getUserOnlineStatus(int $userId): string {
+    $stmt = db()->prepare('SELECT online_status, last_seen FROM users WHERE id = ?');
+    $stmt->execute([$userId]);
+    $user = $stmt->fetch();
+    
+    if (!$user) return 'offline';
+    
+    // Consider online if seen in last 5 minutes
+    if ($user['online_status'] === 'online' && (time() - $user['last_seen']) < 300) {
+        return 'online';
+    }
+    return 'offline';
+}
+
+function updateUserOnlineStatus(int $userId, string $status): void {
+    $stmt = db()->prepare('UPDATE users SET online_status = ?, last_seen = ? WHERE id = ?');
+    $stmt->execute([$status, time(), $userId]);
+}
+
+function handleShareRepo(int $repoId): array {
+    $user = requireAuth();
+    
+    $stmt = db()->prepare('SELECT 1 FROM repositories WHERE id = ? AND user_id = ?');
+    $stmt->execute([$repoId, $user['id']]);
+    if (!$stmt->fetch()) {
+        return ['error' => 'Unauthorized'];
+    }
+    
+    $shareToken = bin2hex(random_bytes(16));
+    $expiresAt = time() + (7 * 24 * 3600); // 7 days
+    
+    $stmt = db()->prepare('INSERT INTO shares (repo_id, shared_with, share_token, expires_at) VALUES (?, ?, ?, ?)');
+    $stmt->execute([$repoId, 'anyone', $shareToken, $expiresAt]);
+    
+    return ['success' => true, 'share_url' => '/share/' . $shareToken];
+}
+
+function getSharedRepos(): array {
+    $user = auth();
+    if (!$user) return [];
+    
+    $stmt = db()->prepare("
+        SELECT s.*, r.name as repo_name, u.username as owner_username
+        FROM shares s
+        JOIN repositories r ON r.id = s.repo_id
+        JOIN users u ON u.id = r.user_id
+        WHERE s.shared_with = ? OR s.share_token IN (SELECT share_token FROM shares WHERE shared_with = ?)
+        ORDER BY s.created_at DESC
+    ");
+    $stmt->execute([$user['username'], $user['username']]);
+    return $stmt->fetchAll();
+}
+
+function handleUpdateRepo(): array {
+    $user = requireAuth();
+    $repoId = (int)($_POST['repo_id'] ?? 0);
+    $name = trim($_POST['name'] ?? '');
+    $desc = trim($_POST['description'] ?? '');
+    $private = isset($_POST['is_private']) ? 1 : 0;
+    $repoType = $_POST['repo_type'] ?? 'code';
+    
+    if (!$repoId || !preg_match('/^[a-zA-Z0-9_.-]{1,100}$/', $name)) {
+        return ['error' => 'Invalid input'];
+    }
+    
+    $stmt = db()->prepare('SELECT 1 FROM repositories WHERE id = ? AND user_id = ?');
+    $stmt->execute([$repoId, $user['id']]);
+    if (!$stmt->fetch()) {
+        return ['error' => 'Unauthorized'];
+    }
+    
+    $stmt = db()->prepare('UPDATE repositories SET name = ?, description = ?, is_private = ?, repo_type = ?, updated_at = ? WHERE id = ?');
+    $stmt->execute([$name, $desc, $private, $repoType, time(), $repoId]);
+    
+    clearCache();
+    return ['success' => true];
+}
+
+function handleDeleteRepo(): array {
+    $user = requireAuth();
+    $repoId = (int)($_POST['repo_id'] ?? 0);
+    
+    if (!$repoId) return ['error' => 'Invalid repo ID'];
+    
+    $stmt = db()->prepare('SELECT name FROM repositories WHERE id = ? AND user_id = ?');
+    $stmt->execute([$repoId, $user['id']]);
+    $repo = $stmt->fetch();
+    
+    if (!$repo) return ['error' => 'Unauthorized'];
+    
+    // Delete repo directory
+    $fs = new RepoFS($user['username'], $repo['name']);
+    $repoPath = REPOS_PATH . '/' . $user['username'] . '/' . $repo['name'];
+    if (is_dir($repoPath)) {
+        $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($repoPath, RecursiveDirectoryIterator::SKIP_DOTS));
+        foreach ($iterator as $file) {
+            if ($file->isDir()) rmdir($file->getPathname());
+            else unlink($file->getPathname());
+        }
+        rmdir($repoPath);
+    }
+    
+    // Delete from DB
+    $stmt = db()->prepare('DELETE FROM repositories WHERE id = ?');
+    $stmt->execute([$repoId]);
+    
+    clearCache();
+    return ['success' => true];
+}
+
+function getUnreadMessageCount(): int {
+    $user = auth();
+    if (!$user) return 0;
+    
+    $stmt = db()->prepare('SELECT COUNT(*) FROM messages WHERE receiver_id = ? AND is_read = 0');
+    $stmt->execute([$user['id']]);
+    return (int)$stmt->fetchColumn();
+}
+
+function getAllUsers(): array {
+    $stmt = db()->prepare('SELECT id, username, avatar, bio, online_status, last_seen FROM users ORDER BY username');
+    $stmt->execute();
     return $stmt->fetchAll();
 }

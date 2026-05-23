@@ -20,6 +20,8 @@ if (($parts[0] ?? '') === 'api') {
         case 'logout':   session_destroy(); echo json_encode(['success' => true]); break;
         
         case 'create-repo': echo json_encode($method === 'POST' ? handleCreateRepo() : ['error' => 'POST only']); break;
+        case 'update-repo': echo json_encode($method === 'POST' ? handleUpdateRepo() : ['error' => 'POST only']); break;
+        case 'delete-repo': echo json_encode($method === 'POST' ? handleDeleteRepo() : ['error' => 'POST only']); break;
         
         case 'upload':
             // /api/upload/username/reponame
@@ -40,6 +42,31 @@ if (($parts[0] ?? '') === 'api') {
         case 'star':
             $repoId = (int)($parts[2] ?? 0);
             echo json_encode($method === 'POST' ? handleStar($repoId) : ['error' => 'POST only']);
+            break;
+        
+        case 'share-repo':
+            $repoId = (int)($parts[2] ?? 0);
+            echo json_encode($method === 'POST' ? handleShareRepo($repoId) : ['error' => 'POST only']);
+            break;
+        
+        case 'send-message':
+            echo json_encode($method === 'POST' ? handleSendMessage() : ['error' => 'POST only']);
+            break;
+        
+        case 'get-messages':
+            $otherUser = $parts[2] ?? '';
+            echo json_encode($method === 'GET' ? getMessages($otherUser) : ['error' => 'GET only']);
+            break;
+        
+        case 'online-status':
+            $userId = (int)($parts[2] ?? 0);
+            echo json_encode(['status' => getUserOnlineStatus($userId)]);
+            break;
+        
+        case 'ping':
+            $user = auth();
+            if ($user) updateUserOnlineStatus($user['id'], 'online');
+            echo json_encode(['success' => true]);
             break;
         
         case 'raw':
@@ -78,6 +105,14 @@ if (count($parts) === 0 || $uri === '/') {
     requireAuth();
     $page = 'new-repo';
     $pageData = ['user' => auth()];
+} elseif (count($parts) === 1 && $parts[0] === 'messages') {
+    requireAuth();
+    $page = 'messages';
+    $pageData = ['user' => auth(), 'users' => getAllUsers()];
+} elseif (count($parts) === 2 && $parts[0] === 'chat') {
+    requireAuth();
+    $page = 'chat';
+    $pageData = ['user' => auth(), 'otherUser' => $parts[1]];
 } elseif (count($parts) === 1) {
     $page = 'profile';
     $pageData = getUserData($parts[0]);
@@ -99,6 +134,9 @@ if (count($parts) === 0 || $uri === '/') {
         $pageData = getRepoData($username, $repoName, $subPath);
         if (!$pageData) { http_response_code(404); $page = '404'; }
     }
+} elseif (count($parts) === 2 && $parts[0] === 'share') {
+    $page = 'shared-repo';
+    $pageData = ['token' => $parts[1]];
 } else {
     $page = '404';
 }
@@ -307,6 +345,12 @@ body { background: var(--surface-0); color: var(--text); font-family: 'DM Sans',
     
     <div class="ml-auto flex items-center gap-2">
       <?php if ($user): ?>
+        <a href="/messages" class="btn btn-ghost btn-sm relative" title="Messages">
+          <i data-lucide="message-circle" style="width:16px;height:16px"></i>
+          <?php $unread = getUnreadMessageCount(); if ($unread > 0): ?>
+            <span class="absolute -top-1 -right-1 w-4 h-4 rounded-full text-xs flex items-center justify-center" style="background:#ef4444;color:white;font-size:10px"><?= $unread ?></span>
+          <?php endif; ?>
+        </a>
         <a href="/new" class="btn btn-primary btn-sm">
           <i data-lucide="plus" style="width:14px;height:14px"></i> New
         </a>
@@ -336,6 +380,8 @@ switch ($page) {
     case 'repo': renderRepo($pageData); break;
     case 'file': renderFile($pageData); break;
     case 'profile': renderProfile($pageData); break;
+    case 'messages': renderMessages($pageData); break;
+    case 'chat': renderChat($pageData); break;
     default: render404(); break;
 }
 
@@ -1158,6 +1204,176 @@ function render404(): void { ?>
 </div>
 <?php } ?>
 </main>
+
+<?php
+// Messages page render function
+function renderMessages(array $d): void { ?>
+<div class="fade-in">
+  <div class="mb-6 flex items-center justify-between">
+    <h1 class="text-2xl font-bold flex items-center gap-2">
+      <i data-lucide="message-circle" style="width:24px;height:24px;color:var(--brand)"></i>
+      Messages
+    </h1>
+  </div>
+  
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <!-- Users list -->
+    <div class="card">
+      <div class="px-4 py-3 border-b flex items-center gap-2" style="border-color:var(--border)">
+        <i data-lucide="users" style="width:15px;height:15px;color:var(--brand)"></i>
+        <span class="text-sm font-medium">All Users</span>
+      </div>
+      <?php foreach ($d['users'] as $u): 
+        if ($u['id'] == $d['user']['id']) continue;
+      ?>
+      <a href="/chat/<?= e($u['username']) ?>" class="file-row">
+        <div class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold" style="background:var(--surface-3);color:var(--brand)">
+          <?= strtoupper(substr($u['username'], 0, 1)) ?>
+        </div>
+        <div class="flex-1">
+          <div class="flex items-center gap-2">
+            <span class="file-name font-medium"><?= e($u['username']) ?></span>
+            <span class="w-2 h-2 rounded-full" style="background:<?= $u['online_status'] === 'online' ? '#22c55e' : '#64748b' ?>"></span>
+          </div>
+          <?php if ($u['bio']): ?>
+            <p class="text-xs" style="color:var(--text-muted)"><?= e(substr($u['bio'], 0, 40)) ?>...</p>
+          <?php endif; ?>
+        </div>
+      </a>
+      <?php endforeach; ?>
+    </div>
+    
+    <!-- Chat preview -->
+    <div class="lg:col-span-2 card p-8 text-center" style="color:var(--text-muted)">
+      <i data-lucide="message-square" style="width:48px;height:48px;margin:0 auto 16px;opacity:0.3"></i>
+      <p class="text-lg">Select a user to start chatting</p>
+      <p class="text-sm mt-2">Real-time messaging with online status</p>
+    </div>
+  </div>
+</div>
+<?php }
+
+// Chat page render function
+function renderChat(array $d): void {
+  $otherUser = $d['otherUser'];
+  $messages = getMessages($otherUser);
+?>
+<div class="fade-in">
+  <div class="mb-4 flex items-center gap-3">
+    <a href="/messages" class="btn btn-ghost btn-sm">
+      <i data-lucide="arrow-left" style="width:16px;height:16px"></i>
+    </a>
+    <div class="flex items-center gap-3">
+      <div class="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold" style="background:var(--surface-3);color:var(--brand)">
+        <?= strtoupper(substr($otherUser, 0, 1)) ?>
+      </div>
+      <div>
+        <h2 class="font-semibold"><?= e($otherUser) ?></h2>
+        <span class="text-xs" style="color:var(--text-muted)" id="user-status">Checking status...</span>
+      </div>
+    </div>
+  </div>
+  
+  <div class="card" style="height:calc(100vh - 250px);display:flex;flex-direction:column">
+    <!-- Messages area -->
+    <div id="messages-container" class="flex-1 overflow-y-auto p-4 space-y-3">
+      <?php foreach ($messages as $msg): 
+        $isMe = $msg['sender_name'] === $d['user']['username'];
+      ?>
+      <div class="flex <?= $isMe ? 'justify-end' : 'justify-start' ?>">
+        <div class="max-w-[70%] px-4 py-2 rounded-xl" style="background:<?= $isMe ? 'var(--brand)' : 'var(--surface-2)' ?>;color:<?= $isMe ? '#0a0e1a' : 'var(--text)' ?>">
+          <p class="text-sm"><?= e($msg['message']) ?></p>
+          <p class="text-xs mt-1" style="opacity:0.7"><?= timeAgo($msg['created_at']) ?></p>
+        </div>
+      </div>
+      <?php endforeach; ?>
+    </div>
+    
+    <!-- Input area -->
+    <div class="border-t p-4" style="border-color:var(--border)">
+      <form id="chat-form" class="flex gap-2">
+        <input type="text" id="message-input" class="input flex-1" placeholder="Type a message..." autocomplete="off">
+        <button type="submit" class="btn btn-primary">
+          <i data-lucide="send" style="width:16px;height:16px"></i>
+        </button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+const OTHER_USER = '<?= e($otherUser) ?>';
+const CURRENT_USER = '<?= e($d['user']['username']) ?>';
+const msgContainer = document.getElementById('messages-container');
+
+// Scroll to bottom
+msgContainer.scrollTop = msgContainer.scrollHeight;
+
+// Check user status
+async function checkStatus() {
+  fetch('/api/online-status/' + OTHER_USER)
+    .then(r => r.json())
+    .then(d => {
+      const statusEl = document.getElementById('user-status');
+      statusEl.textContent = d.status === 'online' ? 'Online' : 'Offline';
+      statusEl.style.color = d.status === 'online' ? '#22c55e' : 'var(--text-muted)';
+    });
+}
+checkStatus();
+setInterval(checkStatus, 30000);
+
+// Send message
+document.getElementById('chat-form').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  const input = document.getElementById('message-input');
+  const msg = input.value.trim();
+  if (!msg) return;
+  
+  await apiPost('/api/send-message', {receiver: OTHER_USER, message: msg});
+  input.value = '';
+  loadMessages();
+});
+
+// Load messages
+async function loadMessages() {
+  const res = await fetch('/api/get-messages/' + OTHER_USER);
+  const msgs = await res.json();
+  msgContainer.innerHTML = '';
+  msgs.forEach(m => {
+    const isMe = m.sender_name === CURRENT_USER;
+    const div = document.createElement('div');
+    div.className = 'flex ' + (isMe ? 'justify-end' : 'justify-start');
+    div.innerHTML = `<div class="max-w-[70%] px-4 py-2 rounded-xl" style="background:${isMe ? 'var(--brand)' : 'var(--surface-2)'};color:${isMe ? '#0a0e1a' : 'var(--text)'}">
+      <p class="text-sm">${escapeHtml(m.message)}</p>
+      <p class="text-xs mt-1" style="opacity:0.7">${timeAgoStr(m.created_at)}</p>
+    </div>`;
+    msgContainer.appendChild(div);
+  });
+  msgContainer.scrollTop = msgContainer.scrollHeight;
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function timeAgoStr(ts) {
+  const diff = Math.floor(Date.now()/1000 - ts);
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return Math.floor(diff/60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff/3600) + 'h ago';
+  return Math.floor(diff/86400) + 'd ago';
+}
+
+// Auto-refresh messages
+setInterval(loadMessages, 5000);
+
+// Ping to stay online
+setInterval(() => fetch('/api/ping'), 30000);
+</script>
+<?php }
+?>
 
 <!-- Auth Modals -->
 <div class="modal-overlay" id="login-modal">

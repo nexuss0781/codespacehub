@@ -9,11 +9,24 @@ define('MAX_FILE_SIZE', 100 * 1024 * 1024); // 100MB
 define('DB_PATH', BASE_PATH . '/gitphp.db');
 
 // Files/dirs to ignore (like .gitignore)
+// Only ignores non-essential media and literature files, keeps code documentation
 define('IGNORE_PATTERNS', [
     'build/', 'dist/', 'node_modules/', '.git/', '__pycache__/',
     'vendor/', '.env', '*.log', '*.tmp', '.DS_Store', 'Thumbs.db',
     '*.pyc', '*.pyo', '.idea/', '.vscode/', '*.swp', 'coverage/',
-    '.next/', '.nuxt/', 'out/', '.cache/', 'tmp/', 'temp/'
+    '.next/', '.nuxt/', 'out/', '.cache/', 'tmp/', 'temp/',
+    // Media files (videos, audio, large images)
+    '*.mp4', '*.avi', '*.mov', '*.wmv', '*.flv', '*.webm',
+    '*.mp3', '*.wav', '*.ogg', '*.flac', '*.aac',
+    '*.jpg', '*.jpeg', '*.png', '*.gif', '*.bmp', '*.webp', '*.ico'
+]);
+
+// Essential documentation files that should NOT be ignored
+define('ESSENTIAL_FILES', [
+    'README.md', 'readme.md', 'Readme.md', 'README.MD',
+    'LICENSE', 'license', 'License', 'LICENSE.txt', 'LICENSE.md',
+    'CONTRIBUTING.md', 'contributing.md', 'CHANGELOG.md', 'changelog.md',
+    'AUTHORS', 'authors', 'CITATION.cff'
 ]);
 
 session_start();
@@ -41,6 +54,8 @@ function initDB(PDO $pdo): void {
             password TEXT NOT NULL,
             avatar TEXT DEFAULT '',
             bio TEXT DEFAULT '',
+            online_status TEXT DEFAULT 'offline',
+            last_seen INTEGER DEFAULT (strftime('%s','now')),
             created_at INTEGER DEFAULT (strftime('%s','now'))
         );
         CREATE TABLE IF NOT EXISTS repositories (
@@ -49,6 +64,7 @@ function initDB(PDO $pdo): void {
             name TEXT NOT NULL,
             description TEXT DEFAULT '',
             is_private INTEGER DEFAULT 0,
+            repo_type TEXT DEFAULT 'code',
             default_branch TEXT DEFAULT 'main',
             stars INTEGER DEFAULT 0,
             forks INTEGER DEFAULT 0,
@@ -70,8 +86,28 @@ function initDB(PDO $pdo): void {
             state TEXT DEFAULT 'open',
             created_at INTEGER DEFAULT (strftime('%s','now'))
         );
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sender_id INTEGER NOT NULL,
+            receiver_id INTEGER NOT NULL,
+            message TEXT NOT NULL,
+            is_read INTEGER DEFAULT 0,
+            created_at INTEGER DEFAULT (strftime('%s','now')),
+            FOREIGN KEY(sender_id) REFERENCES users(id),
+            FOREIGN KEY(receiver_id) REFERENCES users(id)
+        );
+        CREATE TABLE IF NOT EXISTS shares (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo_id INTEGER NOT NULL,
+            shared_with TEXT NOT NULL,
+            share_token TEXT UNIQUE,
+            expires_at INTEGER,
+            created_at INTEGER DEFAULT (strftime('%s','now')),
+            FOREIGN KEY(repo_id) REFERENCES repositories(id)
+        );
         CREATE INDEX IF NOT EXISTS idx_repos_user ON repositories(user_id);
         CREATE INDEX IF NOT EXISTS idx_repos_updated ON repositories(updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_messages ON messages(sender_id, receiver_id, created_at);
     ");
 }
 
@@ -117,6 +153,10 @@ function formatSize(int $bytes): string {
 
 function shouldIgnore(string $path): bool {
     $name = basename($path);
+    
+    // Never ignore essential documentation files
+    if (in_array($name, ESSENTIAL_FILES)) return false;
+    
     foreach (IGNORE_PATTERNS as $pattern) {
         if (str_ends_with($pattern, '/')) {
             if (str_contains($path, rtrim($pattern, '/'))) return true;
@@ -127,6 +167,13 @@ function shouldIgnore(string $path): bool {
             return true;
         }
     }
+    // Additional check for media files by extension
+    $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+    $ignoredExts = ['mp4', 'avi', 'mov', 'wmv', 'flv', 'webm',
+                    'mp3', 'wav', 'ogg', 'flac', 'aac',
+                    'jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'ico'];
+    if (in_array($ext, $ignoredExts)) return true;
+    
     return false;
 }
 
