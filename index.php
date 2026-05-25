@@ -1295,9 +1295,14 @@ if ($page === 'home' || $page === 'repo') {
 }
 
 // Gzip if supported
-if (function_exists('gzencode') && str_contains($_SERVER['HTTP_ACCEPT_ENCODING'] ?? '', 'gzip')) {
-    header('Content-Encoding: gzip');
-    echo gzencode($html, 6);
+if (function_exists('gzencode') && isset($_SERVER['HTTP_ACCEPT_ENCODING']) && stripos($_SERVER['HTTP_ACCEPT_ENCODING'], 'gzip') !== false) {
+    $compressed = @gzencode($html, 6);
+    if ($compressed !== false) {
+        header('Content-Encoding: gzip');
+        echo $compressed;
+    } else {
+        echo $html;
+    }
 } else {
     echo $html;
 }
