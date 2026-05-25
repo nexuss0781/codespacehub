@@ -240,6 +240,13 @@ function getUserData(string $username): ?array {
     $stmt2->execute([$profile['id']]);
     $repos = $stmt2->fetchAll();
     
+    // Ensure username is included in the result
+    foreach ($repos as &$repo) {
+        if (empty($repo['username'])) {
+            $repo['username'] = $profile['username'];
+        }
+    }
+    
     return compact('profile', 'repos', 'isOwner', 'user');
 }
 
