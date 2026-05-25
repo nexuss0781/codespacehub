@@ -944,11 +944,7 @@ function renderFile(array $d): void {
         ];
     }
     
-    // Use the new Editor class for rendering
-    $editor = new Editor($file['name'] ?? $filePath, $file['content'] ?? '', $isNew);
-    $editor->render($d['user'], $repo);
-    return;
-?>
+    ?>
 <div class="fade-in">
   <!-- Header -->
   <div class="flex flex-wrap items-center gap-4 mb-6">
@@ -971,7 +967,7 @@ function renderFile(array $d): void {
     <div class="flex gap-2">
       <?php if ($d['isOwner'] && !$file['is_binary']): ?>
         <?php if ($isEditing): ?>
-          <button onclick="saveFile()" class="btn btn-primary btn-sm">
+          <button onclick="document.getElementById('editor-save-btn')?.click()" class="btn btn-primary btn-sm">
             <i data-lucide="save" style="width:14px;height:14px"></i> Save
           </button>
           <?php if (!$isNew): ?>
@@ -1022,633 +1018,61 @@ function renderFile(array $d): void {
         <p>File too large to display (<?= formatSize($file['size']) ?>)</p>
       </div>
     <?php elseif ($isEditing): ?>
-      <!-- Advanced Code Editor -->
-      <div id="editor-wrap" style="position:relative">
-        <!-- Loading overlay -->
-        <div id="editor-loading" style="position:absolute;inset:0;background:rgba(10,14,26,0.9);display:flex;align-items:center;justify-content:center;z-index:100;backdrop-filter:blur(4px)">
-          <div style="text-align:center">
-            <div style="width:40px;height:40px;border:3px solid var(--border);border-top-color:var(--brand);border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 16px"></div>
-            <p style="color:var(--text-dim);font-size:0.875rem">Initializing powerful editor...</p>
-          </div>
-        </div>
-        
-        <!-- Editor toolbar -->
-        <div style="background:#161b22;padding:10px 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #21262d;flex-wrap:wrap;gap:12px">
-          <div class="flex items-center gap-3 flex-wrap">
-            <span style="font-size:0.75rem;color:#8b949e;font-weight:600">EDITING: <?= e($file['name']) ?></span>
-            <?php if ($file['language'] !== 'unknown'): ?>
-              <span class="badge" style="background:rgba(45,212,191,0.15);color:var(--brand);font-size:0.65rem"><?= e($file['language']) ?></span>
-            <?php endif; ?>
-            <span id="save-status" style="font-size:0.7rem;color:#8b949e;display:flex;align-items:center;gap:4px">
-              <span style="width:6px;height:6px;background:#22c55e;border-radius:50%"></span> Ready
-            </span>
-          </div>
-          <div class="flex items-center gap-2 flex-wrap">
-            <select id="editor-theme" onchange="changeEditorTheme(this.value)" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text-dim);padding:4px 10px;border-radius:6px;font-size:0.7rem;cursor:pointer">
-              <option value="vs-dark">Dark Pro</option>
-              <option value="vs-light">Light</option>
-              <option value="hc-black">High Contrast</option>
-            </select>
-            <button onclick="toggleMinimap()" class="btn btn-ghost btn-sm" title="Toggle Minimap" style="padding:4px 8px">
-              <i data-lucide="layout-template" style="width:14px;height:14px"></i>
-            </button>
-            <button onclick="toggleWordWrap()" class="btn btn-ghost btn-sm" title="Toggle Word Wrap" style="padding:4px 8px">
-              <i data-lucide="wrap-text" style="width:14px;height:14px"></i>
-            </button>
-            <button onclick="formatCode()" class="btn btn-secondary btn-sm" title="Format Code" style="padding:4px 10px;font-size:0.7rem">
-              <i data-lucide="align-left" style="width:12px;height:12px"></i> Format
-            </button>
-          </div>
-        </div>
-        
-        <!-- Monaco Editor Container -->
-        <div id="monaco-editor-container" style="height:600px;min-height:400px;background:#0d1117"></div>
-        
-        <!-- Local cache indicator -->
-        <div id="cache-indicator" style="position:absolute;bottom:10px;right:10px;background:rgba(22,27,34,0.9);padding:6px 12px;border-radius:6px;font-size:0.7rem;color:#8b949e;border:1px solid #21262d;display:none;z-index:50">
-          <i data-lucide="database" style="width:12px;height:12px;display:inline;vertical-align:middle;margin-right:4px"></i>
-          <span id="cache-status">Auto-saved locally</span>
-        </div>
-      </div>
-      
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js" integrity="sha512-m8K+H8FvqVYjWwGJzN3nLhQ=" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-      <script>
-// Monaco Editor Configuration with Aggressive Caching
-let editorInstance = null;
-let autoSaveTimer = null;
-const CACHE_KEY = 'codespace_editor_cache_<?= md5($username . $repoName . $filePath) ?>';
-const LOCAL_BACKUP_KEY = 'codespace_backup_<?= md5($username . $repoName . $filePath) ?>';
-const IS_NEW_FILE = <?= $isNew ? 'true' : 'false' ?>;
-
-// Initialize Monaco Editor with performance optimizations
-require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs' } });
-
-require(['vs/editor/editor.main'], function() {
-  // Hide loading overlay immediately
-  const loadingEl = document.getElementById('editor-loading');
-  if (loadingEl) loadingEl.style.display = 'none';
-  
-  // Check for local backup first (faster than server)
-  let initialContent = '';
-  if (!IS_NEW_FILE) {
-    initialContent = <?= json_encode($file['content'] ?? '') ?>;
-  }
-  
-  const localBackup = localStorage.getItem(LOCAL_BACKUP_KEY);
-  const hasLocalBackup = localBackup !== null && localBackup !== '';
-  
-  if (hasLocalBackup) {
-    initialContent = localBackup;
-    showCacheIndicator('Recovered from local backup');
-  }
-  
-  // Detect language for new files
-  const fileName = '<?= e($file['name']) ?>';
-  const fileExt = fileName.split('.').pop().toLowerCase();
-  let detectedLanguage = 'plaintext';
-  
-  <?php if (!$isNew): ?>
-  detectedLanguage = '<?= e(strtolower($file['language'] === 'unknown' ? 'plaintext' : $file['language'])) ?>';
-  <?php else: ?>
-  // Client-side language detection for new files
-  const langMap = {
-    'js': 'javascript', 'mjs': 'javascript', 'ts': 'typescript', 'tsx': 'typescript',
-    'py': 'python', 'html': 'html', 'htm': 'html', 'css': 'css', 'scss': 'scss',
-    'json': 'json', 'md': 'markdown', 'xml': 'xml', 'svg': 'xml',
-    'php': 'php', 'sql': 'sql', 'sh': 'shell', 'bash': 'shell',
-    'go': 'go', 'rs': 'rust', 'java': 'java', 'cpp': 'cpp', 'c': 'c'
-  };
-  detectedLanguage = langMap[fileExt] || 'plaintext';
-  <?php endif ?>
-  
-  // Create editor instance with optimized settings
-  try {
-    editorInstance = monaco.editor.create(document.getElementById('monaco-editor-container'), {
-      value: initialContent,
-      language: detectedLanguage,
-      theme: 'vs-dark',
-      automaticLayout: true,
-      minimap: { enabled: false },
-      fontSize: 14,
-      lineHeight: 24,
-      fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", monospace',
-      fontLigatures: true,
-      scrollBeyondLastLine: false,
-      renderWhitespace: 'selection',
-      renderControlCharacters: false,
-      wordWrap: 'off',
-      tabSize: 2,
-      insertSpaces: true,
-      detectIndentation: false,
-      formatOnPaste: true,
-      formatOnType: false,
-      autoIndent: 'advanced',
-      suggestOnTriggerCharacters: true,
-      quickSuggestions: { other: true, comments: false, strings: false },
-      suggestSelection: 'first',
-      snippetSuggestions: 'top',
-      folding: true,
-      foldingStrategy: 'indentation',
-      showFoldingControls: 'always',
-      matchBrackets: 'always',
-      autoClosingBrackets: 'always',
-      autoClosingQuotes: 'always',
-      autoSurround: 'languageDefined',
-      cursorBlinking: 'smooth',
-      cursorSmoothCaretAnimation: 'on',
-      smoothScrolling: true,
-      padding: { top: 16, bottom: 16 },
-      rulers: [80, 120],
-      bracketPairColorization: { enabled: true },
-      guides: { indentation: true, bracketPairs: true },
-      occurrenceHighlight: 'singleFile',
-      selectionHighlight: true,
-      semanticHighlighting: true,
-      parameterHints: { enabled: true },
-      hover: { enabled: true, delay: 300 },
-      lightbulb: { enabled: 'onCodeAction' },
-      contextmenu: true,
-      fixedOverflowWidgets: true,
-      overviewRulerBorder: false,
-      hideCursorInOverviewRuler: true,
-      overviewRulerLanes: 0,
-      scrollbar: { vertical: 'visible', horizontal: 'visible', useShadows: false, alwaysConsumeMouseWheel: false },
-      unicodeHighlight: { ambiguousCharacters: false, invisibleCharacters: false }
-    });
-    
-    // Focus editor
-    editorInstance.focus();
-    
-    // Aggressive auto-save to localStorage (every keystroke)
-    editorInstance.onDidChangeModelContent(function() {
-      const content = editorInstance.getValue();
-      localStorage.setItem(LOCAL_BACKUP_KEY, content);
-      
-      // Update cache indicator
-      showCacheIndicator('Auto-saved ' + new Date().toLocaleTimeString());
-      
-      // Clear existing timer
-      if (autoSaveTimer) clearTimeout(autoSaveTimer);
-      
-      // Set save status to "unsaved"
-      updateSaveStatus('unsaved');
-      
-      // Auto-save to server after 5 seconds of inactivity
-      autoSaveTimer = setTimeout(function() {
-        saveToServer(true);
-      }, 5000);
-    });
-    
-    // Keyboard shortcuts
-    editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function() {
-      saveToServer(false);
-    });
-    
-    // Track focus/blur for cache management
-    window.addEventListener('beforeunload', function() {
-      // Ensure backup is saved
-      if (editorInstance) {
-        localStorage.setItem(LOCAL_BACKUP_KEY, editorInstance.getValue());
-      }
-    });
-    
-    // Initialize lucide icons after editor loads
-    if (typeof lucide !== 'undefined') {
-      lucide.createIcons();
-    }
-  } catch (err) {
-    console.error('Failed to initialize Monaco editor:', err);
-    document.getElementById('editor-loading').innerHTML = '<p style="color:#ef4444">Editor failed to load: ' + err.message + '</p><button onclick="location.reload()" class="btn btn-primary btn-sm" style="margin-top:10px">Retry</button>';
-  }
-});
-
-// Save status indicator
-function updateSaveStatus(status) {
-  const el = document.getElementById('save-status');
-  if (!el) return;
-  
-  switch(status) {
-    case 'saving':
-      el.innerHTML = '<span style="width:6px;height:6px;background:#fbbf24;border-radius:50%;animation:pulse 1s infinite"></span> Saving...';
-      break;
-    case 'saved':
-      el.innerHTML = '<span style="width:6px;height:6px;background:#22c55e;border-radius:50%"></span> Saved';
-      break;
-    case 'unsaved':
-      el.innerHTML = '<span style="width:6px;height:6px;background:#f59e0b;border-radius:50%"></span> Unsaved changes';
-      break;
-    case 'error':
-      el.innerHTML = '<span style="width:6px;height:6px;background:#ef4444;border-radius:50%"></span> Save failed';
-      break;
-    default:
-      el.innerHTML = '<span style="width:6px;height:6px;background:#22c55e;border-radius:50%"></span> Ready';
-  }
-}
-
-// Show cache indicator
-function showCacheIndicator(message) {
-  const el = document.getElementById('cache-indicator');
-  const statusEl = document.getElementById('cache-status');
-  if (el && statusEl) {
-    statusEl.textContent = message;
-    el.style.display = 'block';
-    setTimeout(() => { el.style.display = 'none'; }, 3000);
-  }
-}
-
-// Save to server
-async function saveToServer(isAutoSave = false) {
-  if (!editorInstance) return;
-  
-  updateSaveStatus('saving');
-  
-  try {
-    const content = editorInstance.getValue();
-    const res = await apiPost(`/api/save-file/${REPO_USER}/${REPO_NAME}`, {
-      file_path: FILE_PATH,
-      content: content
-    });
-    
-    if (res.success) {
-      updateSaveStatus('saved');
-      
-      // Clear local backup on successful save
-      localStorage.removeItem(LOCAL_BACKUP_KEY);
-      
-      if (!isAutoSave) {
-        toast('File saved successfully!', 'success');
-        setTimeout(() => location.href = `/${REPO_USER}/${REPO_NAME}/blob/${FILE_PATH}`, 1000);
-      } else {
-        showCacheIndicator('Saved to server');
-      }
-    } else {
-      updateSaveStatus('error');
-      if (!isAutoSave) {
-        toast(res.error || 'Save failed', 'error');
-      }
-    }
-  } catch (err) {
-    updateSaveStatus('error');
-    if (!isAutoSave) {
-      toast('Network error: ' + err.message, 'error');
-    }
-    // Keep local backup on error
-    showCacheIndicator('Saved locally only');
-  }
-}
-
-// Theme switching
-function changeEditorTheme(theme) {
-  if (editorInstance) {
-    monaco.editor.setTheme(theme);
-    localStorage.setItem('codespace_editor_theme', theme);
-  }
-}
-
-// Toggle minimap
-function toggleMinimap() {
-  if (editorInstance) {
-    const current = editorInstance.getOption(monaco.editor.EditorOption.minimap);
-    editorInstance.updateOptions({ minimap: { enabled: !current.enabled } });
-  }
-}
-
-// Toggle word wrap
-function toggleWordWrap() {
-  if (editorInstance) {
-    const current = editorInstance.getOption(monaco.editor.EditorOption.wordWrap);
-    editorInstance.updateOptions({ wordWrap: current === 'off' ? 'on' : 'off' });
-  }
-}
-
-// Simple code formatting (basic indentation)
-function formatCode() {
-  if (editorInstance) {
-    editorInstance.getAction('editor.action.formatDocument').run();
-    toast('Code formatted', 'success');
-  }
-}
-
-// Override the old saveFile function
-function saveFile() {
-  saveToServer(false);
-}
-
-// Restore saved theme on load
-document.addEventListener('DOMContentLoaded', function() {
-  const savedTheme = localStorage.getItem('codespace_editor_theme');
-  if (savedTheme && document.getElementById('editor-theme')) {
-    document.getElementById('editor-theme').value = savedTheme;
-  }
-});
-
-// Animation keyframes
-const style = document.createElement('style');
-style.textContent = `
-  @keyframes spin { to { transform: rotate(360deg); } }
-  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-`;
-document.head.appendChild(style);
-      </script>
-    <?php elseif ($file['ext'] === 'md'): ?>
-      <div class="readme-body"><?= Markdown::render($file['content']) ?></div>
+      <!-- Use new Editor component -->
+      <?php
+      $editor = new Editor($file['name'] ?? $filePath, $file['content'] ?? '', $isNew);
+      $editor->renderComponent($d['user'], $repo, $filePath);
+      ?>
     <?php else: ?>
-      <!-- Syntax-highlighted view -->
-      <div class="code-view" id="code-view">
-        <?php
-        $lines = explode("\n", $file['content']);
-        foreach ($lines as $i => $line):
-          $lineHtml = e($line);
-        ?>
-        <div class="code-line">
-          <span class="line-num"><?= $i+1 ?></span>
-          <span class="line-content"><?= $lineHtml ?></span>
+      <!-- View mode -->
+      <?php if ($file['ext'] === 'md' || $file['ext'] === 'markdown'): ?>
+        <!-- Markdown preview -->
+        <div class="readme-body">
+          <?= parseMarkdown($file['content']) ?>
         </div>
-        <?php endforeach; ?>
-      </div>
+      <?php else: ?>
+        <!-- Code view -->
+        <div class="code-view">
+          <?php
+          $lines = explode("\n", $file['content']);
+          foreach ($lines as $i => $line):
+            $highlighted = highlightString($line, $file['ext']);
+          ?>
+          <div class="code-line">
+            <span class="line-num"><?= $i + 1 ?></span>
+            <span class="line-content"><?= $highlighted ?></span>
+          </div>
+          <?php endforeach; ?>
+        </div>
+      <?php endif; ?>
     <?php endif; ?>
   </div>
 </div>
 
+<?php if ($isEditing && !$file['is_binary'] && $file['content'] !== null): ?>
 <script>
-const FILE_PATH = '<?= e(addslashes($filePath)) ?>';
-const REPO_USER = '<?= e($username) ?>';
-const REPO_NAME = '<?= e($repoName) ?>';
-
-const editor = document.getElementById('code-editor');
-if (editor) {
-  // Tab key support
-  editor.addEventListener('keydown', function(e) {
-    if (e.key === 'Tab') {
-      e.preventDefault();
-      const s = this.selectionStart, end = this.selectionEnd;
-      this.value = this.value.substring(0, s) + '  ' + this.value.substring(end);
-      this.selectionStart = this.selectionEnd = s + 2;
+// Helper function for delete
+function deleteFile() {
+  if (!confirm('Are you sure you want to delete this file?')) return;
+  const formData = new FormData();
+  formData.append('filename', <?= json_encode($file['name']) ?>);
+  fetch('/api/delete-file/<?= e($username) ?>/<?= e($repoName) ?>', {
+    method: 'POST',
+    body: formData
+  }).then(r => r.json()).then(res => {
+    if (res.success) {
+      location.href = '/<?= e($username) ?>/<?= e($repoName) ?>';
+    } else {
+      alert('Error: ' + res.error);
     }
-    if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveFile(); }
   });
-  // Auto-resize
-  editor.addEventListener('input', autoResize);
-  autoResize.call(editor);
-  editor.focus();
-}
-
-function autoResize() {
-  this.style.height = 'auto';
-  this.style.height = Math.max(400, this.scrollHeight) + 'px';
-}
-
-function changeTheme(t) {
-  const ed = document.getElementById('code-editor');
-  if (t === 'light') { ed.style.background='#fff'; ed.style.color='#24292f'; }
-  else { ed.style.background='#0d1117'; ed.style.color='#e6edf3'; }
-}
-
-async function saveFile() {
-  const content = editor ? editor.value : '';
-  const res = await apiPost(`/api/save-file/${REPO_USER}/${REPO_NAME}`, {file_path: FILE_PATH, content});
-  if (res.success) {
-    toast('File saved!', 'success');
-    setTimeout(() => location.href = `/${REPO_USER}/${REPO_NAME}/blob/${FILE_PATH}`, 800);
-  } else {
-    toast(res.error || 'Save failed', 'error');
-  }
-}
-
-async function deleteFile() {
-  if (!confirm('Delete this file permanently?')) return;
-  const res = await apiPost(`/api/delete-file/${REPO_USER}/${REPO_NAME}`, {file_path: FILE_PATH});
-  if (res.success) {
-    toast('File deleted', 'success');
-    const dir = FILE_PATH.includes('/') ? FILE_PATH.split('/').slice(0,-1).join('/') : '';
-    setTimeout(() => location.href = `/${REPO_USER}/${REPO_NAME}${dir ? '/tree/'+dir : ''}`, 800);
-  } else toast(res.error || 'Delete failed', 'error');
-}
-
-function copyCode(btn) {
-  const code = btn.closest('.code-block').querySelector('code').textContent;
-  navigator.clipboard.writeText(code).then(() => { btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = 'Copy', 2000); });
 }
 </script>
-<?php }
-
-function renderProfile(array $d): void {
-    $p = $d['profile'];
-    $langColors = ['PHP'=>'#777bb3','JavaScript'=>'#f1e05a','TypeScript'=>'#3178c6','Python'=>'#3572a5','HTML'=>'#e34c26','CSS'=>'#563d7c','Go'=>'#00add8','Rust'=>'#dea584','Java'=>'#b07219'];
-?>
-<div class="fade-in">
-  <div class="grid grid-cols-1 lg:grid-cols-4 gap-8">
-    <!-- Profile sidebar -->
-    <div>
-      <div class="w-24 h-24 rounded-full flex items-center justify-center text-3xl font-bold mb-4" style="background:linear-gradient(135deg,var(--brand),#6366f1);color:#0a0e1a">
-        <?= strtoupper(substr($p['username'], 0, 1)) ?>
-      </div>
-      <h1 class="text-xl font-bold"><?= e($p['username']) ?></h1>
-      <?php if ($p['bio']): ?>
-        <p class="mt-2 text-sm" style="color:var(--text-muted)"><?= e($p['bio']) ?></p>
-      <?php endif; ?>
-      <p class="mt-3 text-xs" style="color:var(--text-muted)">
-        <i data-lucide="calendar" style="width:12px;height:12px;display:inline;margin-right:4px"></i>
-        Joined <?= timeAgo($p['created_at']) ?>
-      </p>
-      <p class="mt-2 text-sm font-medium" style="color:var(--brand)"><?= count($d['repos']) ?> repositories</p>
-    </div>
-    
-    <!-- Repos -->
-    <div class="lg:col-span-3">
-      <div class="flex items-center justify-between mb-4">
-        <h2 class="font-semibold flex items-center gap-2" style="color:var(--text-dim)">
-          <i data-lucide="book" style="width:16px;height:16px"></i> Repositories
-        </h2>
-        <?php if ($d['isOwner']): ?>
-          <a href="/new" class="btn btn-primary btn-sm">
-            <i data-lucide="plus" style="width:14px;height:14px"></i> New
-          </a>
-        <?php endif; ?>
-      </div>
-      
-      <?php if (empty($d['repos'])): ?>
-      <div class="card p-10 text-center" style="color:var(--text-muted)">
-        <i data-lucide="inbox" style="width:32px;height:32px;margin:0 auto 12px;opacity:0.3"></i>
-        <p>No repositories yet</p>
-      </div>
-      <?php else: ?>
-      <div class="flex flex-col gap-3">
-        <?php foreach ($d['repos'] as $r): ?>
-        <a href="/<?= e($r['username']) ?>/<?= e($r['name']) ?>" class="card p-5 block" style="text-decoration:none">
-          <div class="flex items-start justify-between">
-            <div class="flex-1">
-              <div class="flex items-center gap-2 mb-1">
-                <h3 class="font-semibold" style="color:var(--brand)"><?= e($r['name']) ?></h3>
-                <span class="badge <?= $r['is_private'] ? 'badge-private' : 'badge-public' ?>"><?= $r['is_private'] ? 'Private' : 'Public' ?></span>
-              </div>
-              <?php if ($r['description']): ?>
-                <p class="text-sm mb-2" style="color:var(--text-muted)"><?= e(substr($r['description'], 0, 120)) ?></p>
-              <?php endif; ?>
-              <div class="flex items-center gap-4 text-xs" style="color:var(--text-muted)">
-                <span class="flex items-center gap-1"><i data-lucide="star" style="width:11px;height:11px"></i><?= $r['stars'] ?></span>
-                <span>Updated <?= timeAgo($r['updated_at']) ?></span>
-              </div>
-            </div>
-          </div>
-        </a>
-        <?php endforeach; ?>
-      </div>
-      <?php endif; ?>
-    </div>
-  </div>
-</div>
-<?php }
-
-function renderSearch(array $d): void {
-    $q = $d['query'];
-    $results = $d['results'];
-?>
-<div class="fade-in">
-  <div class="mb-6">
-    <h1 class="text-xl font-bold mb-1 flex items-center gap-2">
-      <i data-lucide="search" style="width:20px;height:20px;color:var(--brand)"></i>
-      Search results for <span style="color:var(--brand)">"<?= e($q) ?>"</span>
-    </h1>
-    <p style="color:var(--text-muted);font-size:0.875rem"><?= count($results) ?> repositor<?= count($results) === 1 ? 'y' : 'ies' ?> found</p>
-  </div>
-  
-  <!-- Search bar -->
-  <div class="mb-6 max-w-lg">
-    <form action="/" method="get">
-      <div class="flex gap-2">
-        <input class="input flex-1" name="q" value="<?= e($q) ?>" placeholder="Search repositories..." autofocus>
-        <button type="submit" class="btn btn-primary">
-          <i data-lucide="search" style="width:14px;height:14px"></i> Search
-        </button>
-      </div>
-    </form>
-  </div>
-
-  <?php if (empty($results)): ?>
-  <div class="card p-12 text-center" style="color:var(--text-muted)">
-    <i data-lucide="search-x" style="width:40px;height:40px;margin:0 auto 12px;opacity:0.3"></i>
-    <p class="text-lg font-medium mb-1">No repositories found</p>
-    <p class="text-sm">Try different keywords or check your spelling</p>
-    <a href="/" class="btn btn-secondary btn-sm mt-4">Browse all repos</a>
-  </div>
-  <?php else: ?>
-  <div class="flex flex-col gap-3">
-    <?php foreach ($results as $r): ?>
-    <a href="/<?= e($r['username']) ?>/<?= e($r['name']) ?>" class="card p-5 block" style="text-decoration:none">
-      <div class="flex items-start justify-between gap-4">
-        <div class="flex-1 min-w-0">
-          <div class="flex items-center gap-2 mb-1 flex-wrap">
-            <span style="font-size:0.85rem;color:var(--text-muted)"><?= e($r['username']) ?></span>
-            <span style="color:var(--text-muted)">/</span>
-            <span class="font-semibold" style="color:var(--brand)"><?= e($r['name']) ?></span>
-            <span class="badge <?= $r['is_private'] ? 'badge-private' : 'badge-public' ?>"><?= $r['is_private'] ? 'Private' : 'Public' ?></span>
-          </div>
-          <?php if ($r['description']): ?>
-            <p class="text-sm mb-2" style="color:var(--text-muted)"><?= e(substr($r['description'], 0, 150)) ?></p>
-          <?php endif; ?>
-          <div class="flex items-center gap-4 text-xs" style="color:var(--text-muted)">
-            <span class="flex items-center gap-1"><i data-lucide="star" style="width:11px;height:11px"></i><?= $r['stars'] ?></span>
-            <span>Updated <?= timeAgo($r['updated_at']) ?></span>
-          </div>
-        </div>
-      </div>
-    </a>
-    <?php endforeach; ?>
-  </div>
-  <?php endif; ?>
-</div>
-<?php }
-
-function render404(): void { ?>
-<div class="text-center py-24 fade-in">
-  <div class="text-8xl font-bold mb-4" style="color:var(--brand);opacity:0.3">404</div>
-  <h1 class="text-2xl font-bold mb-2">Page not found</h1>
-  <p style="color:var(--text-muted)" class="mb-6">This repository or page doesn't exist, or you don't have access.</p>
-  <a href="/" class="btn btn-primary">Go home</a>
-</div>
-<?php } ?>
-</main>
+<?php endif; ?>
 
 <?php
-// Messages page render function
-function renderMessages(array $d): void { ?>
-<div class="fade-in">
-  <div class="mb-6 flex items-center justify-between">
-    <h1 class="text-2xl font-bold flex items-center gap-2">
-      <i data-lucide="message-circle" style="width:24px;height:24px;color:var(--brand)"></i>
-      Messages
-    </h1>
-  </div>
-  
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-    <!-- Users list -->
-    <div class="card">
-      <div class="px-4 py-3 border-b flex items-center gap-2" style="border-color:var(--border)">
-        <i data-lucide="users" style="width:15px;height:15px;color:var(--brand)"></i>
-        <span class="text-sm font-medium">All Users</span>
-      </div>
-      <?php foreach ($d['users'] as $u): 
-        if ($u['id'] == $d['user']['id']) continue;
-      ?>
-      <a href="/chat/<?= e($u['username']) ?>" class="file-row">
-        <div class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold" style="background:var(--surface-3);color:var(--brand)">
-          <?= strtoupper(substr($u['username'], 0, 1)) ?>
-        </div>
-        <div class="flex-1">
-          <div class="flex items-center gap-2">
-            <span class="file-name font-medium"><?= e($u['username']) ?></span>
-            <span class="w-2 h-2 rounded-full" style="background:<?= $u['online_status'] === 'online' ? '#22c55e' : '#64748b' ?>"></span>
-          </div>
-          <?php if ($u['bio']): ?>
-            <p class="text-xs" style="color:var(--text-muted)"><?= e(substr($u['bio'], 0, 40)) ?>...</p>
-          <?php endif; ?>
-        </div>
-      </a>
-      <?php endforeach; ?>
-    </div>
-    
-    <!-- Chat preview -->
-    <div class="lg:col-span-2 card p-8 text-center" style="color:var(--text-muted)">
-      <i data-lucide="message-square" style="width:48px;height:48px;margin:0 auto 16px;opacity:0.3"></i>
-      <p class="text-lg">Select a user to start chatting</p>
-      <p class="text-sm mt-2">Real-time messaging with online status</p>
-    </div>
-  </div>
-</div>
-<?php }
+}
 
-// Chat page render function
-function renderChat(array $d): void {
-  $otherUser = $d['otherUser'];
-  $messages = getMessages($otherUser);
-?>
-<div class="fade-in">
-  <div class="mb-4 flex items-center gap-3">
-    <a href="/messages" class="btn btn-ghost btn-sm">
-      <i data-lucide="arrow-left" style="width:16px;height:16px"></i>
-    </a>
-    <div class="flex items-center gap-3">
-      <div class="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold" style="background:var(--surface-3);color:var(--brand)">
-        <?= strtoupper(substr($otherUser, 0, 1)) ?>
-      </div>
-      <div>
-        <h2 class="font-semibold"><?= e($otherUser) ?></h2>
-        <span class="text-xs" style="color:var(--text-muted)" id="user-status">Checking status...</span>
-      </div>
-    </div>
-  </div>
-  
-  <div class="card" style="height:calc(100vh - 250px);display:flex;flex-direction:column">
-    <!-- Messages area -->
-    <div id="messages-container" class="flex-1 overflow-y-auto p-4 space-y-3">
-      <?php foreach ($messages as $msg): 
-        $isMe = $msg['sender_name'] === $d['user']['username'];
-      ?>
-      <div class="flex <?= $isMe ? 'justify-end' : 'justify-start' ?>">
-        <div class="max-w-[70%] px-4 py-2 rounded-xl" style="background:<?= $isMe ? 'var(--brand)' : 'var(--surface-2)' ?>;color:<?= $isMe ? '#0a0e1a' : 'var(--text)' ?>">
-          <p class="text-sm"><?= e($msg['message']) ?></p>
-          <p class="text-xs mt-1" style="opacity:0.7"><?= timeAgo($msg['created_at']) ?></p>
         </div>
       </div>
       <?php endforeach; ?>
