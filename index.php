@@ -127,8 +127,26 @@ if (count($parts) === 0 || $uri === '/') {
     
     if ($parts[2] === 'blob') {
         $page = 'file';
-        $pageData = getFileData($username, $repoName, $subPath);
-        if (!$pageData) { http_response_code(404); $page = '404'; }
+        // Check if this is a new file creation (file doesn't exist yet)
+        $isNewFile = isset($_GET['new']);
+        if ($isNewFile) {
+            // For new files, get repo data instead of file data
+            $repoData = getRepoData($username, $repoName);
+            if ($repoData) {
+                $pageData = [
+                    'repo' => $repoData['repo'],
+                    'file' => null,
+                    'filePath' => $subPath,
+                    'isOwner' => $repoData['isOwner'],
+                    'user' => $repoData['user']
+                ];
+            } else {
+                http_response_code(404); $page = '404';
+            }
+        } else {
+            $pageData = getFileData($username, $repoName, $subPath);
+            if (!$pageData) { http_response_code(404); $page = '404'; }
+        }
     } else {
         $page = 'repo';
         $pageData = getRepoData($username, $repoName, $subPath);
@@ -887,13 +905,30 @@ async function toggleStar(repoId) {
 
 function renderFile(array $d): void {
     $repo = $d['repo'];
-    $file = $d['file'];
+    $file = $d['file'] ?? null;
     $username = $repo['username'];
     $repoName = $repo['name'];
     $filePath = $d['filePath'];
     $dirPath = dirname($filePath) !== '.' ? dirname($filePath) : '';
     $isNew = isset($_GET['new']);
     $isEditing = isset($_GET['edit']) || $isNew;
+    
+    // For new files, create a placeholder file object
+    if ($isNew && !$file) {
+        $fileName = basename($filePath);
+        $ext = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
+        $language = RepoFS::detectLanguageStatic($ext);
+        $file = [
+            'name' => $fileName,
+            'path' => $filePath,
+            'content' => '',
+            'size' => 0,
+            'modified' => time(),
+            'is_binary' => false,
+            'ext' => $ext,
+            'language' => $language
+        ];
+    }
 ?>
 <div class="fade-in">
   <!-- Header -->
