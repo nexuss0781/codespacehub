@@ -8,6 +8,14 @@ define('CACHE_PATH', BASE_PATH . '/cache');
 define('MAX_FILE_SIZE', 100 * 1024 * 1024); // 100MB
 define('DB_PATH', BASE_PATH . '/gitphp.db');
 
+// Auto-detect base URL from request
+function getBaseUrl(): string {
+    $proto = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    return $proto . '://' . $host;
+}
+define('BASE_URL', getBaseUrl());
+
 // Files/dirs to ignore (like .gitignore)
 // Only ignores non-essential media and literature files, keeps code documentation
 define('IGNORE_PATTERNS', [
