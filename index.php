@@ -1003,23 +1003,305 @@ function renderFile(array $d): void {
         <p>File too large to display (<?= formatSize($file['size']) ?>)</p>
       </div>
     <?php elseif ($isEditing): ?>
-      <!-- Editor -->
-      <div id="editor-wrap">
-        <div style="background:#161b22;padding:8px 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #21262d">
-          <div class="flex items-center gap-3">
-            <span style="font-size:0.75rem;color:#8b949e">Editing: <?= e($file['name']) ?></span>
-            <select id="editor-theme" onchange="changeTheme(this.value)" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text-dim);padding:3px 8px;border-radius:6px;font-size:0.75rem">
-              <option value="dark">Dark</option>
-              <option value="light">Light</option>
-            </select>
-          </div>
-          <div class="flex items-center gap-2 text-xs" style="color:#8b949e">
-            <kbd style="background:#21262d;padding:1px 5px;border-radius:3px;font-size:0.7rem">Tab</kbd> = indent
-            <kbd style="background:#21262d;padding:1px 5px;border-radius:3px;font-size:0.7rem">Ctrl+S</kbd> = save
+      <!-- Advanced Code Editor -->
+      <div id="editor-wrap" style="position:relative">
+        <!-- Loading overlay -->
+        <div id="editor-loading" style="position:absolute;inset:0;background:rgba(10,14,26,0.9);display:flex;align-items:center;justify-content:center;z-index:100;backdrop-filter:blur(4px)">
+          <div style="text-align:center">
+            <div style="width:40px;height:40px;border:3px solid var(--border);border-top-color:var(--brand);border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 16px"></div>
+            <p style="color:var(--text-dim);font-size:0.875rem">Initializing powerful editor...</p>
           </div>
         </div>
-        <textarea id="code-editor" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"><?= isset($file['content']) ? e($file['content']) : '' ?></textarea>
+        
+        <!-- Editor toolbar -->
+        <div style="background:#161b22;padding:10px 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #21262d;flex-wrap:wrap;gap:12px">
+          <div class="flex items-center gap-3 flex-wrap">
+            <span style="font-size:0.75rem;color:#8b949e;font-weight:600">EDITING: <?= e($file['name']) ?></span>
+            <?php if ($file['language'] !== 'unknown'): ?>
+              <span class="badge" style="background:rgba(45,212,191,0.15);color:var(--brand);font-size:0.65rem"><?= e($file['language']) ?></span>
+            <?php endif; ?>
+            <span id="save-status" style="font-size:0.7rem;color:#8b949e;display:flex;align-items:center;gap:4px">
+              <span style="width:6px;height:6px;background:#22c55e;border-radius:50%"></span> Ready
+            </span>
+          </div>
+          <div class="flex items-center gap-2 flex-wrap">
+            <select id="editor-theme" onchange="changeEditorTheme(this.value)" style="background:var(--surface-2);border:1px solid var(--border);color:var(--text-dim);padding:4px 10px;border-radius:6px;font-size:0.7rem;cursor:pointer">
+              <option value="vs-dark">Dark Pro</option>
+              <option value="vs-light">Light</option>
+              <option value="hc-black">High Contrast</option>
+            </select>
+            <button onclick="toggleMinimap()" class="btn btn-ghost btn-sm" title="Toggle Minimap" style="padding:4px 8px">
+              <i data-lucide="layout-template" style="width:14px;height:14px"></i>
+            </button>
+            <button onclick="toggleWordWrap()" class="btn btn-ghost btn-sm" title="Toggle Word Wrap" style="padding:4px 8px">
+              <i data-lucide="wrap-text" style="width:14px;height:14px"></i>
+            </button>
+            <button onclick="formatCode()" class="btn btn-secondary btn-sm" title="Format Code" style="padding:4px 10px;font-size:0.7rem">
+              <i data-lucide="align-left" style="width:12px;height:12px"></i> Format
+            </button>
+          </div>
+        </div>
+        
+        <!-- Monaco Editor Container -->
+        <div id="monaco-editor-container" style="height:600px;min-height:400px;background:#0d1117"></div>
+        
+        <!-- Local cache indicator -->
+        <div id="cache-indicator" style="position:absolute;bottom:10px;right:10px;background:rgba(22,27,34,0.9);padding:6px 12px;border-radius:6px;font-size:0.7rem;color:#8b949e;border:1px solid #21262d;display:none;z-index:50">
+          <i data-lucide="database" style="width:12px;height:12px;display:inline;vertical-align:middle;margin-right:4px"></i>
+          <span id="cache-status">Auto-saved locally</span>
+        </div>
       </div>
+      
+      <!-- Load Monaco Editor from CDN -->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js" integrity="sha512-m8K+H8FvqVYjWwGJzN3nLhQ=" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+      <script>
+// Monaco Editor Configuration with Aggressive Caching
+let editorInstance = null;
+let autoSaveTimer = null;
+const CACHE_KEY = 'codespace_editor_cache_<?= md5($username . $repoName . $filePath) ?>';
+const LOCAL_BACKUP_KEY = 'codespace_backup_<?= md5($username . $repoName . $filePath) ?>';
+
+// Initialize Monaco Editor with performance optimizations
+require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs' } });
+
+require(['vs/editor/editor.main'], function() {
+  // Hide loading overlay
+  document.getElementById('editor-loading').style.display = 'none';
+  
+  // Check for local backup first (faster than server)
+  let initialContent = <?= json_encode($file['content'] ?? '') ?>;
+  const localBackup = localStorage.getItem(LOCAL_BACKUP_KEY);
+  const hasLocalBackup = localBackup !== null && localBackup !== '';
+  
+  if (hasLocalBackup) {
+    initialContent = localBackup;
+    showCacheIndicator('Recovered from local backup');
+  }
+  
+  // Create editor instance with optimized settings
+  editorInstance = monaco.editor.create(document.getElementById('monaco-editor-container'), {
+    value: initialContent,
+    language: '<?= e(strtolower($file['language'] === 'unknown' ? 'plaintext' : $file['language'])) ?>',
+    theme: 'vs-dark',
+    automaticLayout: true,
+    minimap: { enabled: false },
+    fontSize: 14,
+    lineHeight: 24,
+    fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", monospace',
+    fontLigatures: true,
+    scrollBeyondLastLine: false,
+    renderWhitespace: 'selection',
+    renderControlCharacters: false,
+    wordWrap: 'off',
+    tabSize: 2,
+    insertSpaces: true,
+    detectIndentation: false,
+    formatOnPaste: true,
+    formatOnType: false,
+    autoIndent: 'advanced',
+    suggestOnTriggerCharacters: true,
+    quickSuggestions: { other: true, comments: false, strings: false },
+    suggestSelection: 'first',
+    snippetSuggestions: 'top',
+    folding: true,
+    foldingStrategy: 'indentation',
+    showFoldingControls: 'always',
+    matchBrackets: 'always',
+    autoClosingBrackets: 'always',
+    autoClosingQuotes: 'always',
+    autoSurround: 'languageDefined',
+    cursorBlinking: 'smooth',
+    cursorSmoothCaretAnimation: 'on',
+    smoothScrolling: true,
+    padding: { top: 16, bottom: 16 },
+    rulers: [80, 120],
+    bracketPairColorization: { enabled: true },
+    guides: { indentation: true, bracketPairs: true },
+    occurrenceHighlight: 'singleFile',
+    selectionHighlight: true,
+    semanticHighlighting: true,
+    parameterHints: { enabled: true },
+    hover: { enabled: true, delay: 300 },
+    lightbulb: { enabled: 'onCodeAction' },
+    contextmenu: true,
+    fixedOverflowWidgets: true,
+    overviewRulerBorder: false,
+    hideCursorInOverviewRuler: true,
+    overviewRulerLanes: 0,
+    scrollbar: { vertical: 'visible', horizontal: 'visible', useShadows: false, alwaysConsumeMouseWheel: false },
+    unicodeHighlight: { ambiguousCharacters: false, invisibleCharacters: false }
+  });
+  
+  // Focus editor
+  editorInstance.focus();
+  
+  // Aggressive auto-save to localStorage (every 2 seconds)
+  editorInstance.onDidChangeModelContent(function() {
+    const content = editorInstance.getValue();
+    localStorage.setItem(LOCAL_BACKUP_KEY, content);
+    
+    // Update cache indicator
+    showCacheIndicator('Auto-saved ' + new Date().toLocaleTimeString());
+    
+    // Clear existing timer
+    if (autoSaveTimer) clearTimeout(autoSaveTimer);
+    
+    // Set save status to "unsaved"
+    updateSaveStatus('unsaved');
+    
+    // Auto-save to server after 5 seconds of inactivity
+    autoSaveTimer = setTimeout(function() {
+      saveToServer(true);
+    }, 5000);
+  });
+  
+  // Keyboard shortcuts
+  editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function() {
+    saveToServer(false);
+  });
+  
+  // Track focus/blur for cache management
+  window.addEventListener('beforeunload', function() {
+    // Ensure backup is saved
+    if (editorInstance) {
+      localStorage.setItem(LOCAL_BACKUP_KEY, editorInstance.getValue());
+    }
+  });
+  
+  // Initialize lucide icons after editor loads
+  if (typeof lucide !== 'undefined') {
+    lucide.createIcons();
+  }
+});
+
+// Save status indicator
+function updateSaveStatus(status) {
+  const el = document.getElementById('save-status');
+  if (!el) return;
+  
+  switch(status) {
+    case 'saving':
+      el.innerHTML = '<span style="width:6px;height:6px;background:#fbbf24;border-radius:50%;animation:pulse 1s infinite"></span> Saving...';
+      break;
+    case 'saved':
+      el.innerHTML = '<span style="width:6px;height:6px;background:#22c55e;border-radius:50%"></span> Saved';
+      break;
+    case 'unsaved':
+      el.innerHTML = '<span style="width:6px;height:6px;background:#f59e0b;border-radius:50%"></span> Unsaved changes';
+      break;
+    case 'error':
+      el.innerHTML = '<span style="width:6px;height:6px;background:#ef4444;border-radius:50%"></span> Save failed';
+      break;
+    default:
+      el.innerHTML = '<span style="width:6px;height:6px;background:#22c55e;border-radius:50%"></span> Ready';
+  }
+}
+
+// Show cache indicator
+function showCacheIndicator(message) {
+  const el = document.getElementById('cache-indicator');
+  const statusEl = document.getElementById('cache-status');
+  if (el && statusEl) {
+    statusEl.textContent = message;
+    el.style.display = 'block';
+    setTimeout(() => { el.style.display = 'none'; }, 3000);
+  }
+}
+
+// Save to server
+async function saveToServer(isAutoSave = false) {
+  if (!editorInstance) return;
+  
+  updateSaveStatus('saving');
+  
+  try {
+    const content = editorInstance.getValue();
+    const res = await apiPost(`/api/save-file/${REPO_USER}/${REPO_NAME}`, {
+      file_path: FILE_PATH,
+      content: content
+    });
+    
+    if (res.success) {
+      updateSaveStatus('saved');
+      
+      // Clear local backup on successful save
+      localStorage.removeItem(LOCAL_BACKUP_KEY);
+      
+      if (!isAutoSave) {
+        toast('File saved successfully!', 'success');
+        setTimeout(() => location.href = `/${REPO_USER}/${REPO_NAME}/blob/${FILE_PATH}`, 1000);
+      } else {
+        showCacheIndicator('Saved to server');
+      }
+    } else {
+      updateSaveStatus('error');
+      if (!isAutoSave) {
+        toast(res.error || 'Save failed', 'error');
+      }
+    }
+  } catch (err) {
+    updateSaveStatus('error');
+    if (!isAutoSave) {
+      toast('Network error: ' + err.message, 'error');
+    }
+    // Keep local backup on error
+    showCacheIndicator('Saved locally only');
+  }
+}
+
+// Theme switching
+function changeEditorTheme(theme) {
+  if (editorInstance) {
+    monaco.editor.setTheme(theme);
+    localStorage.setItem('codespace_editor_theme', theme);
+  }
+}
+
+// Toggle minimap
+function toggleMinimap() {
+  if (editorInstance) {
+    const current = editorInstance.getOption(monaco.editor.EditorOption.minimap);
+    editorInstance.updateOptions({ minimap: { enabled: !current.enabled } });
+  }
+}
+
+// Toggle word wrap
+function toggleWordWrap() {
+  if (editorInstance) {
+    const current = editorInstance.getOption(monaco.editor.EditorOption.wordWrap);
+    editorInstance.updateOptions({ wordWrap: current === 'off' ? 'on' : 'off' });
+  }
+}
+
+// Simple code formatting (basic indentation)
+function formatCode() {
+  if (editorInstance) {
+    editorInstance.getAction('editor.action.formatDocument').run();
+    toast('Code formatted', 'success');
+  }
+}
+
+// Override the old saveFile function
+function saveFile() {
+  saveToServer(false);
+}
+
+// Restore saved theme on load
+document.addEventListener('DOMContentLoaded', function() {
+  const savedTheme = localStorage.getItem('codespace_editor_theme');
+  if (savedTheme && document.getElementById('editor-theme')) {
+    document.getElementById('editor-theme').value = savedTheme;
+  }
+});
+
+// Animation keyframes
+const style = document.createElement('style');
+style.textContent = `
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+`;
+document.head.appendChild(style);
+      </script>
     <?php elseif ($file['ext'] === 'md'): ?>
       <div class="readme-body"><?= Markdown::render($file['content']) ?></div>
     <?php else: ?>
