@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/includes/controllers.php';
+require_once __DIR__ . '/includes/Editor.php';
 
 // ─── ROUTER ──────────────────────────────────────────────────────────────────
 $uri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
@@ -31,7 +32,20 @@ if (($parts[0] ?? '') === 'api') {
         
         case 'save-file':
             $u = $parts[2] ?? ''; $r = $parts[3] ?? '';
-            echo json_encode($method === 'POST' ? handleSaveFile($u, $r) : ['error' => 'POST only']);
+            if ($method === 'POST') {
+                // Use new Editor class for saving
+                $user = auth();
+                if (!$user || $user['username'] !== $u) {
+                    echo json_encode(['error' => 'Unauthorized']);
+                } else {
+                    $repoPath = BASE_PATH . '/' . $u . '/' . $r;
+                    $filename = $_POST['filename'] ?? $_POST['file_path'] ?? '';
+                    $content = $_POST['content'] ?? '';
+                    Editor::handleSave($repoPath, $filename, $content);
+                }
+            } else {
+                echo json_encode(['error' => 'POST only']);
+            }
             break;
         
         case 'delete-file':
@@ -929,6 +943,11 @@ function renderFile(array $d): void {
             'language' => $language
         ];
     }
+    
+    // Use the new Editor class for rendering
+    $editor = new Editor($file['name'] ?? $filePath, $file['content'] ?? '', $isNew);
+    $editor->render($d['user'], $repo);
+    return;
 ?>
 <div class="fade-in">
   <!-- Header -->
