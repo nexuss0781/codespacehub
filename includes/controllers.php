@@ -170,7 +170,7 @@ function getHomeData(): array {
     
     $myRepos = [];
     if ($user) {
-        $stmt2 = db()->prepare("SELECT * FROM repositories WHERE user_id = ? ORDER BY updated_at DESC LIMIT 10");
+        $stmt2 = db()->prepare("SELECT r.*, u.username FROM repositories r JOIN users u ON u.id = r.user_id WHERE r.user_id = ? ORDER BY updated_at DESC LIMIT 10");
         $stmt2->execute([$user['id']]);
         $myRepos = $stmt2->fetchAll();
     }
