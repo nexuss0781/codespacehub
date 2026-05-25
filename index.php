@@ -1052,7 +1052,6 @@ function renderFile(array $d): void {
         </div>
       </div>
       
-      <!-- Load Monaco Editor from CDN -->
       <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js" integrity="sha512-m8K+H8FvqVYjWwGJzN3nLhQ=" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
       <script>
 // Monaco Editor Configuration with Aggressive Caching
@@ -1060,16 +1059,22 @@ let editorInstance = null;
 let autoSaveTimer = null;
 const CACHE_KEY = 'codespace_editor_cache_<?= md5($username . $repoName . $filePath) ?>';
 const LOCAL_BACKUP_KEY = 'codespace_backup_<?= md5($username . $repoName . $filePath) ?>';
+const IS_NEW_FILE = <?= $isNew ? 'true' : 'false' ?>;
 
 // Initialize Monaco Editor with performance optimizations
 require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs' } });
 
 require(['vs/editor/editor.main'], function() {
-  // Hide loading overlay
-  document.getElementById('editor-loading').style.display = 'none';
+  // Hide loading overlay immediately
+  const loadingEl = document.getElementById('editor-loading');
+  if (loadingEl) loadingEl.style.display = 'none';
   
   // Check for local backup first (faster than server)
-  let initialContent = <?= json_encode($file['content'] ?? '') ?>;
+  let initialContent = '';
+  if (!IS_NEW_FILE) {
+    initialContent = <?= json_encode($file['content'] ?? '') ?>;
+  }
+  
   const localBackup = localStorage.getItem(LOCAL_BACKUP_KEY);
   const hasLocalBackup = localBackup !== null && localBackup !== '';
   
@@ -1078,99 +1083,123 @@ require(['vs/editor/editor.main'], function() {
     showCacheIndicator('Recovered from local backup');
   }
   
+  // Detect language for new files
+  const fileName = '<?= e($file['name']) ?>';
+  const fileExt = fileName.split('.').pop().toLowerCase();
+  let detectedLanguage = 'plaintext';
+  
+  <?php if (!$isNew): ?>
+  detectedLanguage = '<?= e(strtolower($file['language'] === 'unknown' ? 'plaintext' : $file['language'])) ?>';
+  <?php else: ?>
+  // Client-side language detection for new files
+  const langMap = {
+    'js': 'javascript', 'mjs': 'javascript', 'ts': 'typescript', 'tsx': 'typescript',
+    'py': 'python', 'html': 'html', 'htm': 'html', 'css': 'css', 'scss': 'scss',
+    'json': 'json', 'md': 'markdown', 'xml': 'xml', 'svg': 'xml',
+    'php': 'php', 'sql': 'sql', 'sh': 'shell', 'bash': 'shell',
+    'go': 'go', 'rs': 'rust', 'java': 'java', 'cpp': 'cpp', 'c': 'c'
+  };
+  detectedLanguage = langMap[fileExt] || 'plaintext';
+  <?php endif ?>
+  
   // Create editor instance with optimized settings
-  editorInstance = monaco.editor.create(document.getElementById('monaco-editor-container'), {
-    value: initialContent,
-    language: '<?= e(strtolower($file['language'] === 'unknown' ? 'plaintext' : $file['language'])) ?>',
-    theme: 'vs-dark',
-    automaticLayout: true,
-    minimap: { enabled: false },
-    fontSize: 14,
-    lineHeight: 24,
-    fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", monospace',
-    fontLigatures: true,
-    scrollBeyondLastLine: false,
-    renderWhitespace: 'selection',
-    renderControlCharacters: false,
-    wordWrap: 'off',
-    tabSize: 2,
-    insertSpaces: true,
-    detectIndentation: false,
-    formatOnPaste: true,
-    formatOnType: false,
-    autoIndent: 'advanced',
-    suggestOnTriggerCharacters: true,
-    quickSuggestions: { other: true, comments: false, strings: false },
-    suggestSelection: 'first',
-    snippetSuggestions: 'top',
-    folding: true,
-    foldingStrategy: 'indentation',
-    showFoldingControls: 'always',
-    matchBrackets: 'always',
-    autoClosingBrackets: 'always',
-    autoClosingQuotes: 'always',
-    autoSurround: 'languageDefined',
-    cursorBlinking: 'smooth',
-    cursorSmoothCaretAnimation: 'on',
-    smoothScrolling: true,
-    padding: { top: 16, bottom: 16 },
-    rulers: [80, 120],
-    bracketPairColorization: { enabled: true },
-    guides: { indentation: true, bracketPairs: true },
-    occurrenceHighlight: 'singleFile',
-    selectionHighlight: true,
-    semanticHighlighting: true,
-    parameterHints: { enabled: true },
-    hover: { enabled: true, delay: 300 },
-    lightbulb: { enabled: 'onCodeAction' },
-    contextmenu: true,
-    fixedOverflowWidgets: true,
-    overviewRulerBorder: false,
-    hideCursorInOverviewRuler: true,
-    overviewRulerLanes: 0,
-    scrollbar: { vertical: 'visible', horizontal: 'visible', useShadows: false, alwaysConsumeMouseWheel: false },
-    unicodeHighlight: { ambiguousCharacters: false, invisibleCharacters: false }
-  });
-  
-  // Focus editor
-  editorInstance.focus();
-  
-  // Aggressive auto-save to localStorage (every 2 seconds)
-  editorInstance.onDidChangeModelContent(function() {
-    const content = editorInstance.getValue();
-    localStorage.setItem(LOCAL_BACKUP_KEY, content);
+  try {
+    editorInstance = monaco.editor.create(document.getElementById('monaco-editor-container'), {
+      value: initialContent,
+      language: detectedLanguage,
+      theme: 'vs-dark',
+      automaticLayout: true,
+      minimap: { enabled: false },
+      fontSize: 14,
+      lineHeight: 24,
+      fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", monospace',
+      fontLigatures: true,
+      scrollBeyondLastLine: false,
+      renderWhitespace: 'selection',
+      renderControlCharacters: false,
+      wordWrap: 'off',
+      tabSize: 2,
+      insertSpaces: true,
+      detectIndentation: false,
+      formatOnPaste: true,
+      formatOnType: false,
+      autoIndent: 'advanced',
+      suggestOnTriggerCharacters: true,
+      quickSuggestions: { other: true, comments: false, strings: false },
+      suggestSelection: 'first',
+      snippetSuggestions: 'top',
+      folding: true,
+      foldingStrategy: 'indentation',
+      showFoldingControls: 'always',
+      matchBrackets: 'always',
+      autoClosingBrackets: 'always',
+      autoClosingQuotes: 'always',
+      autoSurround: 'languageDefined',
+      cursorBlinking: 'smooth',
+      cursorSmoothCaretAnimation: 'on',
+      smoothScrolling: true,
+      padding: { top: 16, bottom: 16 },
+      rulers: [80, 120],
+      bracketPairColorization: { enabled: true },
+      guides: { indentation: true, bracketPairs: true },
+      occurrenceHighlight: 'singleFile',
+      selectionHighlight: true,
+      semanticHighlighting: true,
+      parameterHints: { enabled: true },
+      hover: { enabled: true, delay: 300 },
+      lightbulb: { enabled: 'onCodeAction' },
+      contextmenu: true,
+      fixedOverflowWidgets: true,
+      overviewRulerBorder: false,
+      hideCursorInOverviewRuler: true,
+      overviewRulerLanes: 0,
+      scrollbar: { vertical: 'visible', horizontal: 'visible', useShadows: false, alwaysConsumeMouseWheel: false },
+      unicodeHighlight: { ambiguousCharacters: false, invisibleCharacters: false }
+    });
     
-    // Update cache indicator
-    showCacheIndicator('Auto-saved ' + new Date().toLocaleTimeString());
+    // Focus editor
+    editorInstance.focus();
     
-    // Clear existing timer
-    if (autoSaveTimer) clearTimeout(autoSaveTimer);
+    // Aggressive auto-save to localStorage (every keystroke)
+    editorInstance.onDidChangeModelContent(function() {
+      const content = editorInstance.getValue();
+      localStorage.setItem(LOCAL_BACKUP_KEY, content);
+      
+      // Update cache indicator
+      showCacheIndicator('Auto-saved ' + new Date().toLocaleTimeString());
+      
+      // Clear existing timer
+      if (autoSaveTimer) clearTimeout(autoSaveTimer);
+      
+      // Set save status to "unsaved"
+      updateSaveStatus('unsaved');
+      
+      // Auto-save to server after 5 seconds of inactivity
+      autoSaveTimer = setTimeout(function() {
+        saveToServer(true);
+      }, 5000);
+    });
     
-    // Set save status to "unsaved"
-    updateSaveStatus('unsaved');
+    // Keyboard shortcuts
+    editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function() {
+      saveToServer(false);
+    });
     
-    // Auto-save to server after 5 seconds of inactivity
-    autoSaveTimer = setTimeout(function() {
-      saveToServer(true);
-    }, 5000);
-  });
-  
-  // Keyboard shortcuts
-  editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function() {
-    saveToServer(false);
-  });
-  
-  // Track focus/blur for cache management
-  window.addEventListener('beforeunload', function() {
-    // Ensure backup is saved
-    if (editorInstance) {
-      localStorage.setItem(LOCAL_BACKUP_KEY, editorInstance.getValue());
+    // Track focus/blur for cache management
+    window.addEventListener('beforeunload', function() {
+      // Ensure backup is saved
+      if (editorInstance) {
+        localStorage.setItem(LOCAL_BACKUP_KEY, editorInstance.getValue());
+      }
+    });
+    
+    // Initialize lucide icons after editor loads
+    if (typeof lucide !== 'undefined') {
+      lucide.createIcons();
     }
-  });
-  
-  // Initialize lucide icons after editor loads
-  if (typeof lucide !== 'undefined') {
-    lucide.createIcons();
+  } catch (err) {
+    console.error('Failed to initialize Monaco editor:', err);
+    document.getElementById('editor-loading').innerHTML = '<p style="color:#ef4444">Editor failed to load: ' + err.message + '</p><button onclick="location.reload()" class="btn btn-primary btn-sm" style="margin-top:10px">Retry</button>';
   }
 });
 
